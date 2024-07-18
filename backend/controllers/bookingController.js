@@ -47,9 +47,37 @@ const createBooking = async (req, res) => {
       });
     }
 
-    const newBooking = await createBookingModel(req.body);
+    const { rows } = await pool.query(
+      `INSERT INTO bookings (vehicle_id, user_id, driver_id, approver_id, start_date, end_date, admin_approval, approver_approval, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING *`,
+      [
+        vehicleId,
+        userId,
+        driverId,
+        approverID,
+        startDate,
+        endDate,
+        "pending",
+        "pending",
+        "pending", // Initial status
+      ]
+    );
+
+    const newBooking = rows[0];
     res.status(201).json(newBooking);
   } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const getAllBookings = async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM bookings");
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -63,11 +91,15 @@ const approveBooking = async (req, res) => {
       return res.status(400).json({ message: "Invalid role for approval" });
     }
 
-    const updatedBooking = await updateBookingStatus(
-      bookingId,
-      userRole,
-      status
-    );
+    const query = `
+      UPDATE bookings
+      SET ${userRole}_approval = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+    `;
+    const { rows } = await pool.query(query, [status, bookingId]);
+
+    const updatedBooking = rows[0];
 
     // Check if both approvals are done
     if (
@@ -83,8 +115,9 @@ const approveBooking = async (req, res) => {
 
     res.status(200).json(updatedBooking);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ message: error.message });
   }
 };
 
-module.exports = { createBooking, approveBooking };
+module.exports = { createBooking, approveBooking, getAllBookings };
