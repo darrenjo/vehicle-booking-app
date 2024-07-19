@@ -6,7 +6,19 @@ const pool = require("../config/db");
 
 const createBooking = async (req, res) => {
   try {
-    const { vehicleId, userId, driverId, startDate, endDate } = req.body;
+    const { vehicleId, userId, driverId, approverId, startDate, endDate } =
+      req.body;
+
+    if (
+      !vehicleId ||
+      !userId ||
+      !driverId ||
+      !approverId ||
+      !startDate ||
+      !endDate
+    ) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
 
     // Check for overlapping bookings for the same vehicle
     const overlappingVehicleBookingsQuery = `
@@ -43,32 +55,15 @@ const createBooking = async (req, res) => {
 
     if (overlappingDriverBookings.length > 0) {
       return res.status(400).json({
-        message: "Driver is already booked at requested time range.",
+        message: "Driver is already booked at the requested time range.",
       });
     }
 
-    const { rows } = await pool.query(
-      `INSERT INTO bookings (vehicle_id, user_id, driver_id, approver_id, start_date, end_date, admin_approval, approver_approval, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-       RETURNING *`,
-      [
-        vehicleId,
-        userId,
-        driverId,
-        approverID,
-        startDate,
-        endDate,
-        "pending",
-        "pending",
-        "pending", // Initial status
-      ]
-    );
-
-    const newBooking = rows[0];
+    const newBooking = await createBookingModel(req.body);
     res.status(201).json(newBooking);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: error.message });
+    console.error("Error creating booking:", error);
+    res.status(500).json({ message: "Internal Server Error" });
   }
 };
 
@@ -82,6 +77,19 @@ const getAllBookings = async (req, res) => {
   }
 };
 
+const getPendingBookings = async (req, res) => {
+  try {
+    const { rows: bookings } = await pool.query(`
+      SELECT * FROM bookings
+      WHERE status = 'pending'
+    `);
+    res.json(bookings);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// controllers/bookingController.js
 const approveBooking = async (req, res) => {
   try {
     const { bookingId, status } = req.body;
@@ -91,33 +99,36 @@ const approveBooking = async (req, res) => {
       return res.status(400).json({ message: "Invalid role for approval" });
     }
 
-    const query = `
-      UPDATE bookings
-      SET ${userRole}_approval = $1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-      RETURNING *
-    `;
-    const { rows } = await pool.query(query, [status, bookingId]);
+    const updatedBooking = await updateBookingStatus(
+      bookingId,
+      userRole,
+      status
+    );
 
-    const updatedBooking = rows[0];
-
-    // Check if both approvals are done
     if (
       updatedBooking.admin_approval === "approved" &&
       updatedBooking.approver_approval === "approved"
     ) {
-      // All approvals are done, update the final status
       await pool.query("UPDATE bookings SET status = $1 WHERE id = $2", [
         "approved",
+        bookingId,
+      ]);
+    } else if (status === "rejected") {
+      await pool.query("UPDATE bookings SET status = $1 WHERE id = $2", [
+        "rejected",
         bookingId,
       ]);
     }
 
     res.status(200).json(updatedBooking);
   } catch (error) {
-    console.error(error);
     res.status(500).json({ message: error.message });
   }
 };
 
-module.exports = { createBooking, approveBooking, getAllBookings };
+module.exports = {
+  createBooking,
+  approveBooking,
+  getAllBookings,
+  getPendingBookings,
+};
